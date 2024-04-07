@@ -171,11 +171,24 @@ class GUIManager():
         self.__fade_length = timer//2
 
     def draw(self):
+        self.draw_health()
         if self.__message_timer != 0:
             if self.__message_timer <= self.__fade_length:
                 self.__alpha -= (255//self.__fade_length)
             screen.draw_text_centred(self.__message, 250, (255, 255, 255), self.__alpha)
             self.__message_timer -= 1
+
+    def draw_health(self):
+        player_max_health = player.get_max_health()
+        player_current_health = player.get_current_health()
+        bar_width = 304
+        bar_height = 26
+        health_width = (bar_width - 4) * player_current_health//player_max_health
+        health_colour = 255*player_current_health//player_max_health
+        screen.draw_filled_rect((10, 10, bar_width, bar_height), (100,100,100))
+        screen.draw_rect((10, 10, bar_width, bar_height), (50, 50, 50), 2)
+        if player_current_health > 0:
+            screen.draw_filled_rect((12, 12, health_width, bar_height-4), (255 - health_colour, health_colour, 0))
 
 
 #########################################################################################
@@ -481,6 +494,10 @@ class NPC():
     def get_move_type(self):
         return self._move_type
 
+    def set_position(self, x, y):
+        self.__npc_world_x = x
+        self.__npc_world_y = y
+
     def draw(self):
         self.__npc_screen_x = self.__npc_world_x - (scroll_x_offset*TILE_WIDTH)
         self.__npc_screen_y = self.__npc_world_y - (scroll_y_offset*TILE_HEIGHT)
@@ -518,7 +535,7 @@ class NPC():
         if items.collide_with_base_box(box) == "":
             cx = new_x // 16
             cy = new_y // 16
-            if collision_layer[cy][cx] == 0 or collision_layer[cy][cx] == 4:
+            if collision_layer[cy][cx] != 1:
                 self.__npc_world_x = new_x
                 self.__npc_world_y = new_y
             else:
@@ -629,7 +646,15 @@ class Person(NPC):
             # target for NPC to move towards is 1 tile behind the player
             target_x = player.get_world_x()+dx*TILE_WIDTH
             target_y = player.get_world_y()+dy*TILE_HEIGHT
-            self.move_towards_target(target_x, target_y)
+            # distance between npc's current position and target position
+            dist_x = abs(target_x - self.get_world_x())
+            dist_y = abs(target_y - self.get_world_y())
+            # if the npc is furthat than 15 tile in either the x or y direction the teleport to target
+            # otherwise move towards target
+            if dist_x >= 15*TILE_WIDTH or dist_y >= 15*TILE_HEIGHT:
+                self.set_position(target_x, target_y)
+            else:
+                self.move_towards_target(target_x, target_y)
 
 
 #########################################################################################
@@ -719,6 +744,9 @@ class Player():
         self.__has_sword = False
         self.__ani_count = 0  #animation frame counter
         self.__herosheet_image = SpriteSheet(image_file, 96, 96, 8, 8)
+        self.__player_max_health = 100
+        self.__player_current_health = self.__player_max_health
+        self.__heal_timer = 0
 
     def get_screen_x(self):
         return self.__player_screen_x
@@ -741,6 +769,24 @@ class Player():
 
     def get_direction(self):
         return self.__direction
+
+    def get_max_health(self):
+        return self.__player_max_health
+
+    def get_current_health(self):
+        return self.__player_current_health
+
+    def set_current_health(self, new_health):
+        self.__player_current_health = new_health
+
+    def heal(self):
+        if self.__player_current_health>0:
+            if self.__heal_timer == 0:
+                self.__heal_timer = 120
+                if self.__player_current_health < self.__player_max_health:
+                    self.__player_current_health += 1
+            else:
+                self.__heal_timer -= 1
 
     def draw(self):
         self.__player_screen_x = self.__player_world_x - (scroll_x_offset*TILE_WIDTH)
@@ -794,22 +840,35 @@ class Player():
                 scroll_x_offset = 98
                 scroll_y_offset = 0
             elif collision_layer[cy][cx] == 3:              # Teleport Purple 1
-                self.__player_world_x = 1080
-                self.__player_world_y = 1752
+                self.__player_world_x = (22*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = (56*TILE_WIDTH)+TILE_WIDTH//2
                 scroll_x_offset = 12
-                scroll_y_offset = 28
+                scroll_y_offset = 49
             elif collision_layer[cy][cx] == 5:              # Teleport Yellow 2
                 self.__player_world_x = 108*48
-                self.__player_world_y = 100*48+20
+                self.__player_world_y = 100*TILE_HEIGHT+24
                 scroll_x_offset = 104
                 scroll_y_offset = 97
             elif collision_layer[cy][cx] == 6:              # Teleport Purple 2
-                self.__player_world_x = 1080
-                self.__player_world_y = 1752
-                scroll_x_offset = 12
-                scroll_y_offset = 28
+                self.__player_world_x = (26*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = (28*TILE_WIDTH)+TILE_WIDTH//2
+                scroll_x_offset = 17
+                scroll_y_offset = 23
+            elif collision_layer[cy][cx] == 7:              # Teleport yellow 3
+                self.__player_world_x = (34*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = 137*TILE_WIDTH
+                scroll_x_offset = 25
+                scroll_y_offset = 132
+            elif collision_layer[cy][cx] == 8:              # Teleport Purple 3
+                self.__player_world_x = 15*TILE_WIDTH
+                self.__player_world_y = (86*TILE_WIDTH)+TILE_WIDTH//2
+                scroll_x_offset = 7
+                scroll_y_offset = 81
             else:
                 self.__ani_count = 7
+
+    def update(self):
+        self.heal()
 
 #########################################################################################
 # Map class. Used for loading the map layers, generating the maze and drawing the map
@@ -1039,6 +1098,9 @@ def on_key_down(key, mod):
     else:
         player.set_has_sword(False)
 
+    if key == keys.R:
+        player.set_current_health(player.get_current_health()-1)
+
 #########################################################################################
 # Function to handle mouse button presses
 #########################################################################################
@@ -1135,6 +1197,8 @@ def update():
     # Update all the NPCs
     people_npcs.update()
     monster_npcs.update()
+
+    player.update()
 
 #########################################################################################
 # Startup function to create all the game objects
