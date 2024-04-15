@@ -8,12 +8,19 @@ import os
 import time
 from math import sqrt
 import random
+import textwrap
 
 # Define the window dimensions, title and game speed (frames per second)
 WINDOW_WIDTH = 816
 WINDOW_HEIGHT = 528
 WINDOW_TITLE = "Hero Adventure"
 GAME_FPS = 30
+
+# Define the size and position of the speech box
+SPEECH_RECT_X = 50
+SPEECH_RECT_Y = WINDOW_HEIGHT - 150
+SPEECH_RECT_W = WINDOW_WIDTH - 100
+SPEECH_RECT_H = 130
 
 # Size of each map tile in pixels
 TILE_WIDTH = 48
@@ -32,8 +39,12 @@ MAZE_WIDTH = 23
 MAZE_HEIGHT = 21
 
 # Start co-ordinates for the player
-PLAYER_START_X = 71 * TILE_WIDTH
-PLAYER_START_Y = 87 * TILE_HEIGHT
+#PLAYER_START_X = 57 * TILE_WIDTH
+#PLAYER_START_Y = 88 * TILE_HEIGHT
+
+PLAYER_START_X = 33 * TILE_WIDTH
+PLAYER_START_Y = 60 * TILE_HEIGHT
+
 
 # Define the different Person NPC movement types
 PERSON_MOVE_NONE = 0
@@ -44,6 +55,7 @@ PERSON_MOVE_FOLLOW = 2
 MONSTER_MOVE_NONE = 0
 MONSTER_MOVE_RAILS = 1
 MONSTER_MOVE_ATTACK = 2
+MONSTER_MOVE_DEAD = 3
 
 # Constants used for the different directions the player can face
 FACING_UP = 0
@@ -56,6 +68,17 @@ RAIL_LEFT = 1
 RAIL_RIGHT = 2
 RAIL_UP = 3
 RAIL_DOWN = 4
+
+# Keep track of the rescue kid mission
+KID_MISSION_START = 0           # need to speak to mum
+KID_MISSION_BLACKSMITH = 1      # spoken to mum, need to speak to blacksmith
+KID_MISSION_OLD_MAN = 2         # spoken to blacksmith, need to take axe to old man
+KID_MISSION_FIND_KID = 3        # spoken to old man, given axe, got sword, now find kid
+KID_MISSION_KID_FOUND = 4       # kid is following us
+KID_MISSION_DONE = 5            # spoken to mum with kid following
+
+kid_mission = KID_MISSION_START
+
 
 # Set to TRUE to show Player, NPC, and Item hit boxes. Used for debugging
 DRAW_HIT_BOXES = False
@@ -70,8 +93,8 @@ rail_layer = [[0]*MAP_WIDTH for i in range(MAP_HEIGHT)]
 collision_layer = [[0]*COLLISION_LAYER_WIDTH for i in range(COLLISION_LAYER_HEIGHT)]
 
 # Variables used to keep track of scrolling through the map as the player moves
-scroll_x_offset = 60
-scroll_y_offset = 84
+scroll_x_offset = 50
+scroll_y_offset = 83
 scroll_x_counter = 0
 scroll_y_counter = 0
 
@@ -163,12 +186,23 @@ class GUIManager():
         self.__message_timer = 0
         self.__alpha = 255
         self.__fade_length = 0
+        self.__speech = ""
+        self.__speech_timer = 0
 
     def display_message(self, message, timer):
         self.__message = message
         self.__message_timer = timer
         self.__alpha = 255
         self.__fade_length = timer//2
+
+    def display_speech(self, speech):
+        if self.__speech_timer == 0:
+            self.__speech_timer = 300
+            self.__speech = []
+            text_list = speech.splitlines()
+            for text in text_list:
+                wraplist = textwrap.wrap(text, 70)
+                self.__speech += wraplist
 
     def draw(self):
         self.draw_health()
@@ -177,6 +211,14 @@ class GUIManager():
                 self.__alpha -= (255//self.__fade_length)
             screen.draw_text_centred(self.__message, 250, (255, 255, 255), self.__alpha)
             self.__message_timer -= 1
+
+        if self.__speech_timer != 0:
+            self.__speech_timer -= 1
+            screen.draw_filled_rect((SPEECH_RECT_X, SPEECH_RECT_Y, SPEECH_RECT_W, SPEECH_RECT_H), (100, 100, 100))
+            y = SPEECH_RECT_Y +10
+            for speechline in self.__speech:
+                screen.draw_text(speechline, (SPEECH_RECT_X + 10, y))
+                y += 25
 
     def draw_health(self):
         player_max_health = player.get_max_health()
@@ -346,6 +388,13 @@ class ItemManager():
     def add_item(self, item_name, global_x, global_y, base_box, is_getable, sprite_num):
         self.__items[item_name] = Item(item_name, global_x, global_y, base_box, is_getable, self.__itemsheet_image, sprite_num)
 
+    def get_world_x(self, item_name):
+        return self.__items[item_name].get_x()
+
+    def set_item_position (self, item_name, global_x, global_y):
+        self.__items[item_name].set_x(global_x)
+        self.__items[item_name].set_y(global_y)
+
     def get_selected_slot(self):
         return self.__selected_slot
 
@@ -364,6 +413,12 @@ class ItemManager():
         else:
             name = "Nothing"
         return name
+
+    def is_carried (self, item_name):
+        if self.__inventory[0] == item_name or self.__inventory[1] == item_name:
+            return True
+        else:
+            return False
 
     def get_inventory(self):
         return self.__inventory
@@ -406,15 +461,20 @@ class ItemManager():
     def use_item(self, player_x, player_y):
         if self.__selected_slot == 0:
             return
-        if self.__inventory[self.__selected_slot-1] == "Nothing":
+
+        item_to_use = self.__inventory[self.__selected_slot-1]
+
+        if item_to_use == "Nothing":
             return
-        if self.__inventory[self.__selected_slot-1] == "Empty_Bucket":
+
+        if item_to_use == "Empty_Bucket":
             cx = player_x // 16
             cy = player_y // 16
             if collision_layer[cy][cx] == 4:
                 self.__inventory[self.__selected_slot-1] = "Filled_Bucket"
                 GUI.display_message("You have filled the bucket", 90)
-        elif self.__inventory[self.__selected_slot-1] == "Filled_Bucket":
+
+        elif item_to_use == "Filled_Bucket":
             self.__inventory[self.__selected_slot-1] = "Empty_Bucket"
             fires_put_out = 0
             for item in self.__items.values():  ##for loop to find fire items
@@ -430,6 +490,39 @@ class ItemManager():
             else:
                 GUI.display_message("You put out the fires!", 90)
 
+        elif item_to_use == "Sword":
+            player.do_attack()
+
+        elif item_to_use == "Axe":
+            trees_cut = 0
+            for item in self.__items.values():  ##for loop to find tree items
+                item_name = item.get_name()
+                if item_name[0:4] == "Tree":
+                    if items.distance_to(item_name, player_x, player_y) < 50:
+                        trees_cut += 1
+                        self.__items[item_name].set_x(-100000)
+            if trees_cut == 0:
+                GUI.display_message("There is nothing to cut here!", 90)
+            elif trees_cut == 1:
+                GUI.display_message("You cut the little tree down!", 90)
+            else:
+                GUI.display_message("You cut the little trees down!", 90)
+
+        elif item_to_use == "Key":
+            door_open = False
+            for item in self.__items.values():  ##for loop to find door items
+                item_name = item.get_name()
+                if item_name[0:4] == "Door":
+                    if items.distance_to(item_name, player_x, player_y) < 100:
+                        door_open = True
+                        self.__items[item_name].set_x(-100000)
+            if door_open == False:
+                GUI.display_message("There is nothing to unlock here!", 90)
+            else:
+                GUI.display_message("You unlocked the door!", 90)
+                self.remove("Key")
+
+
     def drop(self, player_x, player_y):
         if self.__selected_slot == 0:
             return "Nothing"
@@ -440,6 +533,16 @@ class ItemManager():
         self.__items[self.__inventory[self.__selected_slot-1]].set_y(player_y+20)
         self.__inventory[self.__selected_slot-1] = "Nothing"
         return dropped
+
+    # Remove an item from the map and out of the player's inventory if they are carrying it
+    def remove(self, item_name):
+        if self.__inventory[0] == item_name:
+            self.__inventory[0] = "Nothing"
+        elif self.__inventory[1] == item_name:
+            self.__inventory[1] = "Nothing"
+
+        self.__items[item_name].set_x(-100000)
+        self.__items[item_name].set_y(-100000)
 
     def draw(self):
         for item in self.__items.values():
@@ -477,9 +580,11 @@ class NPC():
         self._move_type = move_type
 
     def get_screen_x(self):
+        self.__npc_screen_x = self.__npc_world_x - (scroll_x_offset*TILE_WIDTH)
         return self.__npc_screen_x
 
     def get_screen_y(self):
+        self.__npc_screen_y = self.__npc_world_y - (scroll_y_offset*TILE_HEIGHT)
         return self.__npc_screen_y
 
     def get_world_x(self):
@@ -497,6 +602,12 @@ class NPC():
     def set_position(self, x, y):
         self.__npc_world_x = x
         self.__npc_world_y = y
+
+    def get_direction(self):
+        return self.__direction
+
+    def set_direction (self, direction):
+        self.__direction = direction
 
     def draw(self):
         self.__npc_screen_x = self.__npc_world_x - (scroll_x_offset*TILE_WIDTH)
@@ -587,6 +698,9 @@ class NPCManager():
     def set_move_type(self, name, move_type):
         self._npcs[name].set_move_type(move_type)
 
+    def get_move_type(self, name):
+        return self._npcs[name].get_move_type()
+
     def update(self):
         for npc in self._npcs.values():
             npc.update()
@@ -597,11 +711,93 @@ class NPCManager():
 #########################################################################################
 
 class Person(NPC):
-    def __init__(self, npc_x, npc_y, foot_box, direction, image_file, move_type):
+    def __init__(self, name, npc_x, npc_y, foot_box, direction, image_file, move_type):
         super().__init__(npc_x, npc_y, foot_box, direction, image_file, move_type)
         self.__move_x = 0
         self.__move_y = 0
         self.__timer = 60
+        self.__name = name
+
+    def get_name(self):
+        return self.__name
+
+    def talk(self):
+        global kid_mission
+
+        self.set_direction (player.get_direction() ^ 2)
+
+        if self.__name == "lady":
+            if kid_mission == KID_MISSION_START:
+                GUI.display_speech("> Hello Adventurer.\n My son has wandered off towards the cave to the south and I cant find him! "
+                                    "Please rescue him. Oh but you will need a sword, you can get one from the blacksmith.\n You're my only hope")
+                people_npcs.set_move_type("lady", PERSON_MOVE_NONE)
+                kid_mission = KID_MISSION_BLACKSMITH
+
+            elif kid_mission == KID_MISSION_KID_FOUND:
+                GUI.display_speech("> You found my son! Thank you adventurer.\nHere is 50 gold pieces as a reward!")
+                people_npcs.set_move_type("kid", PERSON_MOVE_WANDER)
+                kid_mission = KID_MISSION_DONE
+                items.set_item_position("Gold_Coins", self.get_world_x()+48, self.get_world_y()+48)
+
+
+            elif kid_mission == KID_MISSION_DONE:
+                GUI.display_speech("> Thank you again adventurer.")
+
+            elif kid_mission == KID_MISSION_BLACKSMITH:
+                GUI.display_speech("> The caves are very dangerous the blacksmith might have a sword.")
+
+            else:
+                GUI.display_speech("> Please help me find my son.")
+
+        elif self.__name == "kid":
+            if kid_mission == KID_MISSION_FIND_KID:
+                GUI.display_speech("> I went exploring and got lost in the caves.\n I was too scared to leave alone. Will you take me back to my Mum.")
+                people_npcs.set_move_type("kid", PERSON_MOVE_FOLLOW)
+                kid_mission = KID_MISSION_KID_FOUND
+
+        elif self.__name == "blacksmith":
+            if kid_mission == KID_MISSION_START:
+                GUI.display_speech("> Have you seen Sheila? I think she is out looking for her son.")
+
+            elif kid_mission == KID_MISSION_BLACKSMITH:
+                GUI.display_speech("> I made a nice sword for the old man who lives in the forest. If you take him this axe he might lend you his sword.")
+                items.set_item_position ("Axe", self.get_world_x()-48, self.get_world_y())
+                kid_mission = KID_MISSION_OLD_MAN
+
+            elif kid_mission == KID_MISSION_OLD_MAN:
+                GUI.display_speech("> Take the axe to the old man who lives in the forest and he might lend you his sword.")
+
+            elif kid_mission == KID_MISSION_FIND_KID:
+                GUI.display_speech("> There are lots of monsters in the caves, be careful.")
+
+            elif kid_mission == KID_MISSION_KID_FOUND:
+                GUI.display_speech("> Well done on finding little Timmy, you should take him back to his mum.")
+
+            elif kid_mission == KID_MISSION_KID_FOUND:
+                GUI.display_speech("> Well done adventurer!")
+
+        elif self.__name == "old_man":
+            if kid_mission == KID_MISSION_OLD_MAN:
+                if items.is_carried("Axe"):
+                    GUI.display_speech("> That axe will be perfect for cutting wood. I won't need this sword, you can take it.")
+                    items.remove ("Axe")
+                    items.set_item_position ("Sword", self.get_world_x()-48, self.get_world_y())
+                    kid_mission = KID_MISSION_FIND_KID
+                else:
+                    GUI.display_speech("> Did the blacksmith give you my new axe? I need it for cutting wood.")
+            else:
+                GUI.display_speech("> I don't get many visitors up here. I think people get lost in the maze.")
+
+        elif self.__name == "pirate":
+            if items.get_world_x("Gate") != -100000:
+                if items.is_carried("Gold_Coins"):
+                    GUI.display_speech("> Those gold pieces will do nicely for passage on my ship.")
+                    items.remove ("Gold_Coins")
+                    items.set_item_position ("Gate", -100000, -100000)
+                else:
+                    GUI.display_speech("> If you want to sail on my ship it will cost 50 gold pieces!")
+            else:
+                GUI.display_speech("> You can board the ship, we will be leaving soon.")
 
     def update(self):
         # Code to make the person wander about the island
@@ -667,35 +863,89 @@ class PersonManager(NPCManager):
         super().__init__()
 
     def add_person(self, name, x, y, foot_box, direction, image_file, move_type=PERSON_MOVE_NONE):
-        self._npcs[name] = Person(x, y, foot_box, direction, image_file, move_type)
+        self._npcs[name] = Person(name, x, y, foot_box, direction, image_file, move_type)
+
+    def person_talking_to (self, player_x, player_y, facing):
+        dx = 0
+        dy = 0
+        if facing == FACING_LEFT:
+            dx = -1
+        elif facing == FACING_RIGHT:
+            dx = 1
+        elif facing == FACING_UP:
+            dy = -1
+        elif facing == FACING_DOWN:
+            dy = 1
+
+        # need to find person that is near 1 tile in front of the player
+        facing_x = player_x+dx*TILE_WIDTH
+        facing_y = player_y+dy*TILE_HEIGHT
+
+        nearest_person_name = "None"
+        nearest_person_distance = 99999999
+        for peep in self._npcs.values():  ##for loop to find person which is closest to the player
+            person_name = peep.get_name()
+            person_x = peep.get_world_x()
+            person_y = peep.get_world_y()
+            dx = facing_x - person_x
+            dy = facing_y - person_y
+            distance = sqrt(dx*dx + dy*dy)  ##Pythagoras theorum to calculate the distance of the current person
+            print (person_name, distance)
+            if distance < nearest_person_distance and distance < 50:  ## works out the closest person to the player
+                nearest_person_distance = distance
+                nearest_person_name = person_name
+
+        return nearest_person_name
+
+    def talk_to (self, name):
+        self._npcs[name].talk()
 
 #########################################################################################
 # Monster class. Inherits the NPC class and adds movement for monster NPCs.
 #########################################################################################
 
 class Monster(NPC):
-    def __init__(self, npc_x, npc_y, foot_box, direction, image_file, move_type):
+    def __init__(self, npc_x, npc_y, foot_box, body_box, direction, image_file, attack_file, move_type):
         super().__init__(npc_x, npc_y, foot_box, direction, image_file, move_type)
+        self.__attack_image = SpriteSheet(attack_file, 160, 128, 4, 4)
+        self.__is_attacking = False
+        self.__attack_frame = 0
+        self.__body_box = body_box
+        self.__health = 50
+        self.__init_move_type = move_type
+        self.__init_x = npc_x
+        self.__init_y = npc_y
+        self.__init_direction = direction
+        #x and y offset pick a random point around the player that the monster will move towards
+        self.__x_offset = random.randint(-30, 30)
+        self.__y_offset = random.randint(-30, 30)
 
     def update(self):
+        dist_x = abs(player.get_world_x() - self.get_world_x())
+        dist_y = abs(player.get_world_y() - self.get_world_y())
+        if dist_x > 15*TILE_WIDTH or dist_y > 15*TILE_HEIGHT:
+            self.set_position(self.__init_x, self.__init_y)
+            self.set_direction(self.__init_direction)
+            self.set_move_type(self.__init_move_type)
+        if self._move_type == MONSTER_MOVE_NONE or self._move_type == MONSTER_MOVE_RAILS:
+            if dist_x < 96 and dist_y < 96:
+                self._move_type = MONSTER_MOVE_ATTACK
         # Code for getting an NPC to attack the player
-        # The monster tries to get in front of the player
+        # The monster moves towards the player and attacks if in range
         if self._move_type == MONSTER_MOVE_ATTACK:
-            facing = player.get_direction()
-            dx = 0
-            dy = 0
-            if facing == FACING_LEFT:
-                dx = -1
-            elif facing == FACING_RIGHT:
-                dx = 1
-            elif facing == FACING_UP:
-                dy = -1
-            elif facing == FACING_DOWN:
-                dy = 1
-            # target for monster to move towards is 1 tile in front the player
-            target_x = player.get_world_x()+dx*TILE_WIDTH
-            target_y = player.get_world_y()+dy*TILE_HEIGHT
-            self.move_towards_target(target_x, target_y)
+            if self.__is_attacking:
+                if frame_count % 3 == 0:
+                    self.__attack_frame+=1
+                    if self.__attack_frame == 4:
+                        self.__attack_frame = 0
+                        self.__is_attacking = False
+            else:
+                if dist_x < 50 and dist_y < 30 and random.randint(1, 100)>95:
+                    self.__is_attacking = True
+                    player.take_damage(14)
+                else:
+                    self.move_towards_target(player.get_world_x()+self.__x_offset, player.get_world_y()+self.__y_offset)
+
         # Code for moving an NPC along rails
         elif self._move_type == MONSTER_MOVE_RAILS:
             x = self.get_world_x() // TILE_WIDTH
@@ -716,6 +966,25 @@ class Monster(NPC):
             target_y = (y + dy) * TILE_HEIGHT + (TILE_HEIGHT // 2)
             self.move_towards_target(target_x, target_y)
 
+    def draw(self):
+        if self.__is_attacking == True:
+            self.__attack_image.draw(self.get_screen_x()-80, self.get_screen_y()-90, self.get_direction()*4+self.__attack_frame)
+        elif self._move_type == MONSTER_MOVE_DEAD:
+            self.__attack_image.draw(self.get_screen_x()-80, self.get_screen_y()-90, self.get_direction()+16)
+        else:
+            super().draw()
+        if DRAW_HIT_BOXES:
+            show_body_box = self.__body_box.move(self.get_screen_x(), self.get_screen_y())
+            screen.draw_rect(show_body_box, (255,0,255))
+
+    def check_if_hit(self, sword_box):
+        hit_box = self.__body_box.move(self.get_world_x(), self.get_world_y())
+        if hit_box.colliderect(sword_box):
+            self.__health -= 10
+            if self.__health <= 0:
+                self.__is_attacking = False
+                self.set_move_type(MONSTER_MOVE_DEAD)
+
 #########################################################################################
 # MonsterManager class. Class to manage all of the Monster NPCs
 #                      Inherits the NPCManager class
@@ -725,15 +994,19 @@ class MonsterManager(NPCManager):
     def __init__(self):
         super().__init__()
 
-    def add_monster(self, name, x, y, foot_box, direction, image_file, move_type=MONSTER_MOVE_NONE):
-        self._npcs[name] = Monster(x, y, foot_box, direction, image_file, move_type)
+    def add_monster(self, name, x, y, foot_box, body_box, direction, image_file, attack_file, move_type=MONSTER_MOVE_NONE):
+        self._npcs[name] = Monster(x, y, foot_box, body_box, direction, image_file, attack_file, move_type)
+
+    def check_hit(self, sword_box):
+        for enemy in self._npcs.values():
+            enemy.check_if_hit(sword_box)
 
 #########################################################################################
 # Player class. Functions for drawing the player and moving them about the map
 #########################################################################################
 
 class Player():
-    def __init__(self, player_x, player_y, foot_box, direction, image_file):
+    def __init__(self, player_x, player_y, foot_box, direction, image_file, attack_file):
         self.__player_world_x = player_x
         self.__player_world_y = player_y
         self.__foot_box = foot_box
@@ -742,11 +1015,16 @@ class Player():
         self.__direction = direction
         self.__weapon_offset = 0  ##determines what set of sprites are shown (walking/ walking with sword)
         self.__has_sword = False
+        self.__sword_boxes = [Rect(-20,-65,94,32),Rect(-64,-50,40,32),Rect(-15,-5,33,33),Rect(22,-50,40,32)]
         self.__ani_count = 0  #animation frame counter
         self.__herosheet_image = SpriteSheet(image_file, 96, 96, 8, 8)
+        self.__heroattack_image = SpriteSheet(attack_file, 160, 128, 4, 4)
         self.__player_max_health = 100
         self.__player_current_health = self.__player_max_health
         self.__heal_timer = 0
+        self.__is_attacking = False
+        self.__attack_frame = 0
+
 
     def get_screen_x(self):
         return self.__player_screen_x
@@ -779,6 +1057,13 @@ class Player():
     def set_current_health(self, new_health):
         self.__player_current_health = new_health
 
+    def do_attack(self):
+        if self.__is_attacking == False:
+            self.__is_attacking = True
+            sword_box = self.__sword_boxes[self.__direction].move(self.__player_world_x, self.__player_world_y)
+            monster_npcs.check_hit(sword_box)
+
+
     def heal(self):
         if self.__player_current_health>0:
             if self.__heal_timer == 0:
@@ -788,16 +1073,27 @@ class Player():
             else:
                 self.__heal_timer -= 1
 
+    def take_damage(self, damage):
+        self.__player_current_health -= damage
+
     def draw(self):
         self.__player_screen_x = self.__player_world_x - (scroll_x_offset*TILE_WIDTH)
         self.__player_screen_y = self.__player_world_y - (scroll_y_offset*TILE_HEIGHT)
-        self.__herosheet_image.draw(self.__player_screen_x-47, self.__player_screen_y-90, self.__direction*8+self.__ani_count + self.__weapon_offset)
+        if self.__is_attacking:
+            self.__heroattack_image.draw(self.__player_screen_x-80, self.__player_screen_y-90, self.__direction*4+self.__attack_frame)
+        else:
+            self.__herosheet_image.draw(self.__player_screen_x-47, self.__player_screen_y-90, self.__direction*8+self.__ani_count + self.__weapon_offset)
         if DRAW_HIT_BOXES:
             show_foot_box = self.__foot_box.move(self.__player_screen_x, self.__player_screen_y)
             screen.draw_rect(show_foot_box, (0,255,255))
+            if self.__is_attacking:
+                show_sword_box = self.__sword_boxes[self.__direction].move(self.__player_screen_x, self.__player_screen_y)
+                screen.draw_rect(show_sword_box, (255,255,0))
 
     def move(self, x, y):
         global frame_count, scroll_x_offset, scroll_y_offset
+        if self.__is_attacking:
+            return
 
         if frame_count % 3 == 0:
             self.__ani_count = (self.__ani_count + 1) % 8
@@ -841,27 +1137,31 @@ class Player():
                 scroll_y_offset = 0
             elif collision_layer[cy][cx] == 3:              # Teleport Purple 1
                 self.__player_world_x = (22*TILE_WIDTH)+TILE_WIDTH//2
-                self.__player_world_y = (56*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = (56*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 12
                 scroll_y_offset = 49
-            elif collision_layer[cy][cx] == 5:              # Teleport Yellow 2
-                self.__player_world_x = 108*48
-                self.__player_world_y = 100*TILE_HEIGHT+24
+            elif collision_layer[cy][cx] == 5:              # Teleport into maze (Yellow 2)
+                self.__player_world_x = (110*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = (104*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 104
                 scroll_y_offset = 97
-            elif collision_layer[cy][cx] == 6:              # Teleport Purple 2
-                self.__player_world_x = (26*TILE_WIDTH)+TILE_WIDTH//2
-                self.__player_world_y = (28*TILE_WIDTH)+TILE_WIDTH//2
-                scroll_x_offset = 17
-                scroll_y_offset = 23
+            elif collision_layer[cy][cx] == 6:              # Teleport to forest entrance (Purple 2)
+                self.__player_world_x = (36*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = (31*TILE_HEIGHT)+TILE_HEIGHT//2
+                scroll_x_offset = 30
+                scroll_y_offset = 25
             elif collision_layer[cy][cx] == 7:              # Teleport yellow 3
-                self.__player_world_x = (34*TILE_WIDTH)+TILE_WIDTH//2
-                self.__player_world_y = 137*TILE_WIDTH
-                scroll_x_offset = 25
-                scroll_y_offset = 132
+                if items.is_carried("Sword"):
+                    self.__player_world_x = (34*TILE_WIDTH)+TILE_WIDTH//2
+                    self.__player_world_y = 137*TILE_HEIGHT
+                    scroll_x_offset = 25
+                    scroll_y_offset = 132
+                else:
+                    GUI.display_message("It is too dangerous to go in there unarmed.", 90)
+                    self.__player_world_y += 48
             elif collision_layer[cy][cx] == 8:              # Teleport Purple 3
                 self.__player_world_x = 15*TILE_WIDTH
-                self.__player_world_y = (86*TILE_WIDTH)+TILE_WIDTH//2
+                self.__player_world_y = (86*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 7
                 scroll_y_offset = 81
             else:
@@ -869,6 +1169,12 @@ class Player():
 
     def update(self):
         self.heal()
+        if self.__is_attacking:
+            if frame_count % 3 == 0:
+                self.__attack_frame+=1
+                if self.__attack_frame == 4:
+                    self.__attack_frame = 0
+                    self.__is_attacking = False
 
 #########################################################################################
 # Map class. Used for loading the map layers, generating the maze and drawing the map
@@ -928,9 +1234,11 @@ class Map():
                 self.__maze[my+dy+dy][mx+dx+dx] = True
                 stack.append((mx+dx+dx,my+dy+dy))
 
-        # Add in an entrance and exit to the maze
-        self.__maze[15][0] = True
-        self.__maze[15][1] = True
+        # Add in an entrance to the maze
+        self.__maze[19][3] = True
+        self.__maze[20][3] = True
+
+        # and an exit to the maze
         self.__maze[1][15] = True
         self.__maze[0][15] = True
 
@@ -1033,7 +1341,7 @@ class MenuScreen():
         self.__in_menu = True
         self.__logo_image = SpriteSheet("logo.png", 558, 100, 1, 1)
         self.__start_button = MenuButton("Start Game", Rect(138, 165, 540, 80))
-        self.__options_button = MenuButton("Options", Rect(138, 265, 540, 80))
+        self.__controls_button = MenuButton("Controls", Rect(138, 265, 540, 80))
         self.__credits_button = MenuButton("Credits", Rect(138, 365, 540, 80))
 
     def menu_main(self):
@@ -1049,7 +1357,7 @@ class MenuScreen():
                     self.menu_mouse_down(event.pos, event.button)
 
             self.__start_button.draw()
-            self.__options_button.draw()
+            self.__controls_button.draw()
             self.__credits_button.draw()
             screen.update()
 
@@ -1101,13 +1409,20 @@ def on_key_down(key, mod):
     if key == keys.R:
         player.set_current_health(player.get_current_health()-1)
 
+
 #########################################################################################
 # Function to handle mouse button presses
 #########################################################################################
 
 def on_mouse_down(pos, button):
     if button == mouse.RIGHT:
-        items.use_item(player.get_world_x(), player.get_world_y())
+        if items.get_selected_item() != "Nothing":
+            items.use_item(player.get_world_x(), player.get_world_y())
+        else:
+            person_talking = people_npcs.person_talking_to(player.get_world_x(), player.get_world_y(), player.get_direction())
+            print (person_talking)
+            if person_talking != "None":
+                people_npcs.talk_to(person_talking)
 
 
 #########################################################################################
@@ -1213,19 +1528,22 @@ def startup():
     game_map.generate_maze()
 
     # Create a Player object
-    player = Player(PLAYER_START_X, PLAYER_START_Y, Rect(-15, -10, 33, 15), 2, "herosheet.png")
+    player = Player(PLAYER_START_X, PLAYER_START_Y, Rect(-15, -10, 33, 15), 2, "herosheet.png", "heroattack.png")
 
     # Create a PersonManager object and add the villagers to the game
     people_npcs = PersonManager()
-    people_npcs.add_person("old_man", 1396, 1876, Rect(-15, -10, 33, 15), 2, "oldman.png")
-    people_npcs.add_person("lady", 50*TILE_WIDTH+24, 83*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "lady.png", PERSON_MOVE_WANDER)
-    people_npcs.add_person("kid", 68*TILE_WIDTH, 83*TILE_HEIGHT, Rect(-15, -10, 33, 15), 2, "kid.png", PERSON_MOVE_FOLLOW)
-    people_npcs.add_person("blacksmith", 70*TILE_WIDTH, 86*TILE_HEIGHT, Rect(-15, -10, 33, 15), 2, "blacksmith.png")
-    people_npcs.set_move_type("blacksmith", PERSON_MOVE_WANDER)
+    people_npcs.add_person("old_man", 124*TILE_WIDTH+24, 75*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "oldman.png")
+    people_npcs.add_person("lady", 14*TILE_WIDTH+24, 67*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "lady.png", PERSON_MOVE_WANDER)
+    people_npcs.add_person("kid", 33*TILE_WIDTH+24, 109*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "kid.png", PERSON_MOVE_NONE)
+    people_npcs.add_person("blacksmith", 35*TILE_WIDTH+24, 60*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "blacksmith.png", PERSON_MOVE_NONE)
+    people_npcs.add_person("pirate", 8*TILE_WIDTH+24, 88*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "pirate.png", PERSON_MOVE_NONE)
 
     # Create a MonsterManager object and add the monsters to the game
     monster_npcs = MonsterManager()
-    monster_npcs.add_monster("orc", 55*TILE_WIDTH+24, 83*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "orc.png", MONSTER_MOVE_RAILS)
+    monster_npcs.add_monster("orc", 47*TILE_WIDTH+24, 118*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), Rect(-13, -50, 26, 50), 2, "orc.png", "orcattack.png", MONSTER_MOVE_RAILS)
+    monster_npcs.add_monster("orc2", 48*TILE_WIDTH+24, 123*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), Rect(-13, -50, 26, 50), 2, "orc.png", "orcattack.png", MONSTER_MOVE_RAILS)
+    monster_npcs.add_monster("orc3", 32*TILE_WIDTH+24, 120*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), Rect(-13, -50, 26, 50), 2, "orc.png", "orcattack.png", MONSTER_MOVE_NONE)
+    monster_npcs.add_monster("orc4", 34*TILE_WIDTH+24, 120*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), Rect(-13, -50, 26, 50), 2, "orc.png", "orcattack.png", MONSTER_MOVE_NONE)
 
     # Create an object for the GUI
     GUI = GUIManager()
@@ -1235,12 +1553,25 @@ def startup():
 
     # Create an ItemManager object and add all the items to the game
     items = ItemManager("items.png")
-    items.add_item("Sword", 1296, 1600, Rect(-15, -13, 16, 8), True, 0)
-    items.add_item("Empty_Bucket", 1344, 1625, Rect(-15, -13, 31, 15), True, 10)
+    items.add_item("Sword", -100000, -100000, Rect(-15, -13, 16, 8), True, 0)
+    items.add_item("Empty_Bucket", 48 * TILE_WIDTH+24, 120 * TILE_HEIGHT, Rect(-15, -13, 31, 15), True, 10)
     items.add_item("Filled_Bucket", -100000, -100000, Rect(-15, -13, 31, 15), True, 15)
-    items.add_item("Axe", 1296, 1650, Rect(-15, -11, 12, 8), True, 5)
-    items.add_item("Fire1", 1400 , 1700, Rect(-20, -44, 43, 47), False, 20)
-    items.add_item("Fire2", 1400 , 1735, Rect(-20, -44, 43, 47), False, 20)
+    items.add_item("Axe", -100000, -100000, Rect(-15, -11, 12, 8), True, 5)
+    items.add_item("Fire1", 27*TILE_WIDTH , 128*TILE_HEIGHT, Rect(-20, -44, 43, 47), False, 20)
+    items.add_item("Fire2", 27*TILE_WIDTH , 129*TILE_HEIGHT-10, Rect(-20, -44, 43, 47), False, 20)
+    items.add_item("Fire3", 40*TILE_WIDTH , 132*TILE_HEIGHT, Rect(-20, -44, 43, 47), False, 20)
+    items.add_item("Fire4", 40*TILE_WIDTH , 133*TILE_HEIGHT-10, Rect(-20, -44, 43, 47), False, 20)
+    items.add_item("Fire5", 34*TILE_WIDTH+24, 58*TILE_HEIGHT+24, Rect(-20, -44, 43, 47), False, 20)
+    items.add_item("Tree", 36 * TILE_WIDTH + 24, 35 * TILE_HEIGHT, Rect(-20, -44, 43, 47), False, 30)
+    items.add_item("Door1", 33 * TILE_WIDTH+24, 119 * TILE_HEIGHT + 12, Rect(-20, -44, 43, 47), False, 25)
+    items.add_item("Door2", 33 * TILE_WIDTH+24, 120 * TILE_HEIGHT + 12, Rect(-20, -44, 43, 47), False, 35)
+    items.add_item("Gold_Coins", -100000, -100000, Rect(-15, -13, 31, 15), True, 50)
+    items.add_item("Gate", 9 * TILE_WIDTH+23, 90 * TILE_HEIGHT, Rect(-15, -13, 31, 15), False, 45)
+
+    if random.randint(0,1) == 0:
+        items.add_item("Key", 48*TILE_WIDTH, 133*TILE_HEIGHT, Rect(-15, -13, 31, 15), True, 40)
+    else:
+        items.add_item("Key", 19*TILE_WIDTH, 128*TILE_HEIGHT, Rect(-15, -13, 31, 15), True, 40)
 
 
 #########################################################################################
