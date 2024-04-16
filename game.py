@@ -176,6 +176,35 @@ class Display():
         fps = 1.0/(delay + delta)
         pygame.display.set_caption("{0}: {1:.2f}".format(self.__title, fps))
 
+class SaveGameManager():
+    def __init__(self):
+        self.__filename = ""
+        self.__csv_file = None
+        self.__csv_writer = None
+        self.__csv_reader = None
+
+    def save_open(self, slot):
+        self.__filename = "slot"+str(slot)+".txt"
+        self.__csv_file = open(self.__filename, "w", newline="")
+        self.__csv_writer = csv.writer(self.__csv_file)
+
+    def save_write_list(self, data_list):
+        self.__csv_writer.writerow(data_list)
+
+    def save_close(self):
+        self.__csv_file.close()
+
+    def load_open(self, slot):
+        self.__filename = "slot"+str(slot)+".txt"
+        self.__csv_file = open(self.__filename, "r")
+        self.__csv_reader = csv.reader(self.__csv_file)
+
+    def load_read_list(self):
+        return next(self.__csv_reader)
+
+    def load_close(self):
+        self.__csv_file.close()
+
 #########################################################################################
 # GUIManager class. Handles GUI elements such as displaying in game messages
 #########################################################################################
@@ -328,6 +357,14 @@ class Item():
         self.__sprite_num = sprite_num
         self.__ani_count = 1
 
+    def save(self):
+        save_game.save_write_list([self.__global_x, self.__global_y])
+
+    def load(self):
+        data = save_game.load_read_list()
+        self.__global_x = int(data[0])
+        self.__global_y = int(data[1])
+
     def get_x(self):
         return self.__global_x
 
@@ -384,6 +421,25 @@ class ItemManager():
         self.__ani_count = 0  ##animation frame counter
         self.__inventory = ["Nothing", "Nothing"]
         self.__selected_slot = 0
+
+    def save(self):
+        save_game.save_write_list(self.__inventory)
+        save_game.save_write_list([self.__selected_slot])
+        save_game.save_write_list([len(self.__items)])
+        for item_key in self.__items.keys():
+            save_game.save_write_list([item_key])
+            self.__items[item_key].save()
+
+    def load(self):
+        self.__inventory = save_game.load_read_list()
+        data = save_game.load_read_list()
+        self.__selected_slot = int(data[0])
+        data = save_game.load_read_list()
+        num_items = int(data[0])
+        for i in range(num_items):
+            data = save_game.load_read_list()
+            item_key = data[0]
+            self.__items[item_key].load()
 
     def add_item(self, item_name, global_x, global_y, base_box, is_getable, sprite_num):
         self.__items[item_name] = Item(item_name, global_x, global_y, base_box, is_getable, self.__itemsheet_image, sprite_num)
@@ -579,6 +635,16 @@ class NPC():
         self.__herosheet_image = SpriteSheet(image_file, 96, 96, 8, 8)
         self._move_type = move_type
 
+    def save(self):
+        save_game.save_write_list([self.__npc_world_x, self.__npc_world_y, self.__direction, self._move_type])
+
+    def load(self):
+        data = save_game.load_read_list()
+        self.__npc_world_x = int(data[0])
+        self.__npc_world_y = int(data[1])
+        self.__direction = int(data[2])
+        self._move_type = int(data[3])
+
     def get_screen_x(self):
         self.__npc_screen_x = self.__npc_world_x - (scroll_x_offset*TILE_WIDTH)
         return self.__npc_screen_x
@@ -690,6 +756,20 @@ class NPC():
 class NPCManager():
     def __init__(self):
         self._npcs = {}
+
+    def save(self):
+        save_game.save_write_list([len(self._npcs)])
+        for npc_key in self._npcs.keys():
+            save_game.save_write_list([npc_key])
+            self._npcs[npc_key].save()
+
+    def load(self):
+        data = save_game.load_read_list()
+        num_npcs = int(data[0])
+        for i in range(num_npcs):
+            data = save_game.load_read_list()
+            npc_key = data[0]
+            self._npcs[npc_key].load()
 
     def draw(self):
         for npc in self._npcs.values():
@@ -1025,6 +1105,19 @@ class Player():
         self.__is_attacking = False
         self.__attack_frame = 0
 
+    def save(self):
+        save_game.save_write_list([self.__player_world_x, self.__player_world_y, self.__direction, self.__weapon_offset,
+                                   self.__has_sword, self.__player_current_health, self.__heal_timer])
+
+    def load(self):
+        data = save_game.load_read_list()
+        self.__player_world_x = int(data[0])
+        self.__player_world_y = int(data[1])
+        self.__direction  = int(data[2])
+        self.__weapon_offset = int(data[3])
+        self.__has_sword = (data[4]=="True")
+        self.__player_current_health = int(data[5])
+        self.__heal_timer = int(data[6])
 
     def get_screen_x(self):
         return self.__player_screen_x
@@ -1375,6 +1468,7 @@ class MenuScreen():
 #########################################################################################
 
 def on_key_down(key, mod):
+    global kid_mission, scroll_x_offset, scroll_y_offset
 
     if key == keys.E:
         item_got = items.pickup(player.get_world_x(), player.get_world_y())  ##calls pickup function
@@ -1406,9 +1500,28 @@ def on_key_down(key, mod):
     else:
         player.set_has_sword(False)
 
-    if key == keys.R:
-        player.set_current_health(player.get_current_health()-1)
+    if key == keys.O:
+        save_game.save_open(1)
+        save_game.save_write_list([kid_mission, scroll_x_offset, scroll_y_offset])
+        player.save()
+        items.save()
+        people_npcs.save()
+        monster_npcs.save()
+        save_game.save_close()
+        GUI.display_message("Game Saved", 90)
 
+    if key == keys.P:
+        save_game.load_open(1)
+        data = save_game.load_read_list()
+        kid_mission = int(data[0])
+        scroll_x_offset = int(data[1])
+        scroll_y_offset = int(data[2])
+        player.load()
+        items.load()
+        people_npcs.load()
+        monster_npcs.load()
+        save_game.load_close()
+        GUI.display_message("Game Loaded", 90)
 
 #########################################################################################
 # Function to handle mouse button presses
@@ -1520,12 +1633,15 @@ def update():
 #########################################################################################
 
 def startup():
-    global game_map, player, people_npcs, monster_npcs, items, scene, GUI
+    global game_map, save_game, player, people_npcs, monster_npcs, items, scene, GUI
 
     # Load the map and generate the maze
     game_map = Map(0, 0, 11, 17, "tilesheet.png")
     game_map.load()
     game_map.generate_maze()
+
+    #Creates the object for loading and saving the game
+    save_game = SaveGameManager()
 
     # Create a Player object
     player = Player(PLAYER_START_X, PLAYER_START_Y, Rect(-15, -10, 33, 15), 2, "herosheet.png", "heroattack.png")
