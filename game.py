@@ -6,6 +6,7 @@ import csv
 import sys
 import os
 import time
+from datetime import datetime
 from math import sqrt
 import random
 import textwrap
@@ -39,12 +40,11 @@ MAZE_WIDTH = 23
 MAZE_HEIGHT = 21
 
 # Start co-ordinates for the player
-#PLAYER_START_X = 57 * TILE_WIDTH
-#PLAYER_START_Y = 88 * TILE_HEIGHT
+PLAYER_START_X = 57 * TILE_WIDTH
+PLAYER_START_Y = 88 * TILE_HEIGHT
 
-PLAYER_START_X = 33 * TILE_WIDTH
-PLAYER_START_Y = 60 * TILE_HEIGHT
-
+#speed the player moves in pixels
+PLAYER_SPEED = 4
 
 # Define the different Person NPC movement types
 PERSON_MOVE_NONE = 0
@@ -141,9 +141,15 @@ class Display():
         textimg.set_alpha(alpha)
         self.__screen.blit (textimg, (position_x, position_y))
 
-    def draw_big_text_centred (self, text, position_y, colour=(255,255,255), alpha=255):
+    def draw_big_text (self, text, position, colour=(255,255,255), alpha=255):
         textimg=self.__big_font.render(text, True, colour)
-        position_x = (WINDOW_WIDTH - textimg.get_width())//2
+        textimg.set_alpha(alpha)
+        self.__screen.blit (textimg, position)
+
+    def draw_big_text_centred (self, text, position_x, position_y, width, height, colour=(255,255,255), alpha=255):
+        textimg=self.__big_font.render(text, True, colour)
+        position_x += (width - textimg.get_width())//2
+        position_y += (height - textimg.get_height())//2
         textimg.set_alpha(alpha)
         self.__screen.blit (textimg, (position_x, position_y))
 
@@ -173,8 +179,12 @@ class Display():
         time.sleep(delay)
 
         # Update the window caption to include actual FPS
-        fps = 1.0/(delay + delta)
-        pygame.display.set_caption("{0}: {1:.2f}".format(self.__title, fps))
+        #fps = 1.0/(delay + delta)
+        #pygame.display.set_caption("{0}: {1:.2f}".format(self.__title, fps))
+
+#########################################################################################
+# SaveGameManager class. Used for saving and loading the player's progress
+#########################################################################################
 
 class SaveGameManager():
     def __init__(self):
@@ -182,6 +192,37 @@ class SaveGameManager():
         self.__csv_file = None
         self.__csv_writer = None
         self.__csv_reader = None
+        self.__loaded_slot = 0
+        self.__slot_meta = ["", "", "", ""]
+        self.__slot_meta[1] = ["File 1", "", 0, 0]
+        self.__slot_meta[2] = ["File 2", "", 0, 0]
+        self.__slot_meta[3] = ["File 3", "", 0, 0]
+        self.load_slot_meta()
+
+    def get_slot_meta(self):
+        return self.__slot_meta
+
+    def save_slot_meta(self):
+        csv_file = open("slot_meta.txt", "w", newline="")
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerows(self.__slot_meta)
+        csv_file.close()
+
+    def load_slot_meta(self):
+        try:
+            csv_file = open("slot_meta.txt", "r")
+        except OSError:
+            pass
+        else:
+            csv_reader = csv.reader(csv_file)
+            meta = next(csv_reader)
+            for i in range(1, 4):
+                meta = next(csv_reader)
+                self.__slot_meta[i][0] = meta[0]
+                self.__slot_meta[i][1] = meta[1]
+                self.__slot_meta[i][2] = int(meta[2])
+                self.__slot_meta[i][3] = int(meta[3])
+            csv_file.close()
 
     def save_open(self, slot):
         self.__filename = "slot"+str(slot)+".txt"
@@ -193,17 +234,51 @@ class SaveGameManager():
 
     def save_close(self):
         self.__csv_file.close()
+        self.__slot_meta[self.__loaded_slot][2] = player.get_max_health()
+        self.__slot_meta[self.__loaded_slot][3] = player.get_current_health()
+        now = datetime.now()
+        self.__slot_meta[self.__loaded_slot][1] = now.strftime("%d-%b-%Y %I:%M%p")  #format date and time e.g. 01-Apr-2024 22:54PM
+        self.save_slot_meta()
+
+    def save_game(self):
+        global kid_mission, scroll_x_offset, scroll_y_offset
+        self.save_open(self.__loaded_slot)
+        self.save_write_list([kid_mission, scroll_x_offset, scroll_y_offset])
+        player.save()
+        items.save()
+        people_npcs.save()
+        monster_npcs.save()
+        self.save_close()
 
     def load_open(self, slot):
         self.__filename = "slot"+str(slot)+".txt"
-        self.__csv_file = open(self.__filename, "r")
-        self.__csv_reader = csv.reader(self.__csv_file)
+        try:
+            self.__csv_file = open(self.__filename, "r")
+        except OSError:
+            return False
+        else:
+            self.__csv_reader = csv.reader(self.__csv_file)
+            return True
 
     def load_read_list(self):
         return next(self.__csv_reader)
 
     def load_close(self):
         self.__csv_file.close()
+
+    def load_game(self, slot):
+        global kid_mission, scroll_x_offset, scroll_y_offset
+        self.__loaded_slot = slot
+        if self.load_open(slot):
+            data = game_slot.load_read_list()
+            kid_mission = int(data[0])
+            scroll_x_offset = int(data[1])
+            scroll_y_offset = int(data[2])
+            player.load()
+            items.load()
+            people_npcs.load()
+            monster_npcs.load()
+            self.load_close()
 
 #########################################################################################
 # GUIManager class. Handles GUI elements such as displaying in game messages
@@ -234,7 +309,7 @@ class GUIManager():
                 self.__speech += wraplist
 
     def draw(self):
-        self.draw_health()
+        self.draw_health(10, 10, 304, 26, player.get_max_health(), player.get_current_health())
         if self.__message_timer != 0:
             if self.__message_timer <= self.__fade_length:
                 self.__alpha -= (255//self.__fade_length)
@@ -249,17 +324,13 @@ class GUIManager():
                 screen.draw_text(speechline, (SPEECH_RECT_X + 10, y))
                 y += 25
 
-    def draw_health(self):
-        player_max_health = player.get_max_health()
-        player_current_health = player.get_current_health()
-        bar_width = 304
-        bar_height = 26
+    def draw_health(self, x, y, bar_width, bar_height, player_max_health, player_current_health):
         health_width = (bar_width - 4) * player_current_health//player_max_health
         health_colour = 255*player_current_health//player_max_health
-        screen.draw_filled_rect((10, 10, bar_width, bar_height), (100,100,100))
-        screen.draw_rect((10, 10, bar_width, bar_height), (50, 50, 50), 2)
+        screen.draw_filled_rect((x, y, bar_width, bar_height), (100,100,100))
+        screen.draw_rect((x, y, bar_width, bar_height), (50, 50, 50), 2)
         if player_current_health > 0:
-            screen.draw_filled_rect((12, 12, health_width, bar_height-4), (255 - health_colour, health_colour, 0))
+            screen.draw_filled_rect((x+2, y+2, health_width, bar_height-4), (255 - health_colour, health_colour, 0))
 
 
 #########################################################################################
@@ -358,10 +429,10 @@ class Item():
         self.__ani_count = 1
 
     def save(self):
-        save_game.save_write_list([self.__global_x, self.__global_y])
+        game_slot.save_write_list([self.__global_x, self.__global_y])
 
     def load(self):
-        data = save_game.load_read_list()
+        data = game_slot.load_read_list()
         self.__global_x = int(data[0])
         self.__global_y = int(data[1])
 
@@ -423,21 +494,21 @@ class ItemManager():
         self.__selected_slot = 0
 
     def save(self):
-        save_game.save_write_list(self.__inventory)
-        save_game.save_write_list([self.__selected_slot])
-        save_game.save_write_list([len(self.__items)])
+        game_slot.save_write_list(self.__inventory)
+        game_slot.save_write_list([self.__selected_slot])
+        game_slot.save_write_list([len(self.__items)])
         for item_key in self.__items.keys():
-            save_game.save_write_list([item_key])
+            game_slot.save_write_list([item_key])
             self.__items[item_key].save()
 
     def load(self):
-        self.__inventory = save_game.load_read_list()
-        data = save_game.load_read_list()
+        self.__inventory = game_slot.load_read_list()
+        data = game_slot.load_read_list()
         self.__selected_slot = int(data[0])
-        data = save_game.load_read_list()
+        data = game_slot.load_read_list()
         num_items = int(data[0])
         for i in range(num_items):
-            data = save_game.load_read_list()
+            data = game_slot.load_read_list()
             item_key = data[0]
             self.__items[item_key].load()
 
@@ -445,7 +516,10 @@ class ItemManager():
         self.__items[item_name] = Item(item_name, global_x, global_y, base_box, is_getable, self.__itemsheet_image, sprite_num)
 
     def get_world_x(self, item_name):
-        return self.__items[item_name].get_x()
+        try:
+            return self.__items[item_name].get_x()
+        except:
+            return -100000
 
     def set_item_position (self, item_name, global_x, global_y):
         self.__items[item_name].set_x(global_x)
@@ -528,7 +602,9 @@ class ItemManager():
             cy = player_y // 16
             if collision_layer[cy][cx] == 4:
                 self.__inventory[self.__selected_slot-1] = "Filled_Bucket"
-                GUI.display_message("You have filled the bucket", 90)
+                GUI.display_message("You have filled the bucket!", 90)
+            else:
+                GUI.display_message("You need to fill the bucket with water first!", 90)
 
         elif item_to_use == "Filled_Bucket":
             self.__inventory[self.__selected_slot-1] = "Empty_Bucket"
@@ -636,10 +712,10 @@ class NPC():
         self._move_type = move_type
 
     def save(self):
-        save_game.save_write_list([self.__npc_world_x, self.__npc_world_y, self.__direction, self._move_type])
+        game_slot.save_write_list([self.__npc_world_x, self.__npc_world_y, self.__direction, self._move_type])
 
     def load(self):
-        data = save_game.load_read_list()
+        data = game_slot.load_read_list()
         self.__npc_world_x = int(data[0])
         self.__npc_world_y = int(data[1])
         self.__direction = int(data[2])
@@ -758,16 +834,16 @@ class NPCManager():
         self._npcs = {}
 
     def save(self):
-        save_game.save_write_list([len(self._npcs)])
+        game_slot.save_write_list([len(self._npcs)])
         for npc_key in self._npcs.keys():
-            save_game.save_write_list([npc_key])
+            game_slot.save_write_list([npc_key])
             self._npcs[npc_key].save()
 
     def load(self):
-        data = save_game.load_read_list()
+        data = game_slot.load_read_list()
         num_npcs = int(data[0])
         for i in range(num_npcs):
-            data = save_game.load_read_list()
+            data = game_slot.load_read_list()
             npc_key = data[0]
             self._npcs[npc_key].load()
 
@@ -809,12 +885,12 @@ class Person(NPC):
         if self.__name == "lady":
             if kid_mission == KID_MISSION_START:
                 GUI.display_speech("> Hello Adventurer.\n My son has wandered off towards the cave to the south and I cant find him! "
-                                    "Please rescue him. Oh but you will need a sword, you can get one from the blacksmith.\n You're my only hope")
+                                    "Please rescue him. Oh but you will need a sword, you can get one from the blacksmith.")
                 people_npcs.set_move_type("lady", PERSON_MOVE_NONE)
                 kid_mission = KID_MISSION_BLACKSMITH
 
             elif kid_mission == KID_MISSION_KID_FOUND:
-                GUI.display_speech("> You found my son! Thank you adventurer.\nHere is 50 gold pieces as a reward!")
+                GUI.display_speech("> You found my son! Thank you adventurer you were my only hope.\nHere is 50 gold pieces as a reward!")
                 people_npcs.set_move_type("kid", PERSON_MOVE_WANDER)
                 kid_mission = KID_MISSION_DONE
                 items.set_item_position("Gold_Coins", self.get_world_x()+48, self.get_world_y()+48)
@@ -855,6 +931,12 @@ class Person(NPC):
 
             elif kid_mission == KID_MISSION_KID_FOUND:
                 GUI.display_speech("> Well done adventurer!")
+
+        elif self.__name == "abi":
+            if items.get_world_x("Tree") != -100000:
+                GUI.display_speech("> This tree is blocking my way into the forest! I wish someone would cut it down")
+            else:
+                GUI.display_speech("> Thank you for clearing the way adventurer!")
 
         elif self.__name == "old_man":
             if kid_mission == KID_MISSION_OLD_MAN:
@@ -1001,6 +1083,12 @@ class Monster(NPC):
         self.__y_offset = random.randint(-30, 30)
 
     def update(self):
+        if player.get_current_health() <= 0:
+            return
+
+        if self._move_type == MONSTER_MOVE_DEAD:
+            return
+
         dist_x = abs(player.get_world_x() - self.get_world_x())
         dist_y = abs(player.get_world_y() - self.get_world_y())
         if dist_x > 15*TILE_WIDTH or dist_y > 15*TILE_HEIGHT:
@@ -1010,6 +1098,7 @@ class Monster(NPC):
         if self._move_type == MONSTER_MOVE_NONE or self._move_type == MONSTER_MOVE_RAILS:
             if dist_x < 96 and dist_y < 96:
                 self._move_type = MONSTER_MOVE_ATTACK
+
         # Code for getting an NPC to attack the player
         # The monster moves towards the player and attacks if in range
         if self._move_type == MONSTER_MOVE_ATTACK:
@@ -1106,11 +1195,11 @@ class Player():
         self.__attack_frame = 0
 
     def save(self):
-        save_game.save_write_list([self.__player_world_x, self.__player_world_y, self.__direction, self.__weapon_offset,
+        game_slot.save_write_list([self.__player_world_x, self.__player_world_y, self.__direction, self.__weapon_offset,
                                    self.__has_sword, self.__player_current_health, self.__heal_timer])
 
     def load(self):
-        data = save_game.load_read_list()
+        data = game_slot.load_read_list()
         self.__player_world_x = int(data[0])
         self.__player_world_y = int(data[1])
         self.__direction  = int(data[2])
@@ -1120,9 +1209,11 @@ class Player():
         self.__heal_timer = int(data[6])
 
     def get_screen_x(self):
+        self.__player_screen_x = self.__player_world_x - (scroll_x_offset*TILE_WIDTH)
         return self.__player_screen_x
 
     def get_screen_y(self):
+        self.__player_screen_y = self.__player_world_y - (scroll_y_offset*TILE_HEIGHT)
         return self.__player_screen_y
 
     def get_world_x(self):
@@ -1156,7 +1247,6 @@ class Player():
             sword_box = self.__sword_boxes[self.__direction].move(self.__player_world_x, self.__player_world_y)
             monster_npcs.check_hit(sword_box)
 
-
     def heal(self):
         if self.__player_current_health>0:
             if self.__heal_timer == 0:
@@ -1167,15 +1257,23 @@ class Player():
                 self.__heal_timer -= 1
 
     def take_damage(self, damage):
-        self.__player_current_health -= damage
+        global game_over_countdown
+        if self.__player_current_health > 0:
+            self.__player_current_health -= damage
+            if self.__player_current_health <= 0:
+                GUI.display_message("Game Over", 90)
+                game_over_countdown = 90
 
     def draw(self):
         self.__player_screen_x = self.__player_world_x - (scroll_x_offset*TILE_WIDTH)
         self.__player_screen_y = self.__player_world_y - (scroll_y_offset*TILE_HEIGHT)
-        if self.__is_attacking:
-            self.__heroattack_image.draw(self.__player_screen_x-80, self.__player_screen_y-90, self.__direction*4+self.__attack_frame)
+        if self.__player_current_health>0:
+            if self.__is_attacking:
+                self.__heroattack_image.draw(self.__player_screen_x-80, self.__player_screen_y-90, self.__direction*4+self.__attack_frame)
+            else:
+                self.__herosheet_image.draw(self.__player_screen_x-47, self.__player_screen_y-90, self.__direction*8+self.__ani_count + self.__weapon_offset)
         else:
-            self.__herosheet_image.draw(self.__player_screen_x-47, self.__player_screen_y-90, self.__direction*8+self.__ani_count + self.__weapon_offset)
+            self.__heroattack_image.draw(self.__player_screen_x-80, self.__player_screen_y-90, self.__direction+16)
         if DRAW_HIT_BOXES:
             show_foot_box = self.__foot_box.move(self.__player_screen_x, self.__player_screen_y)
             screen.draw_rect(show_foot_box, (0,255,255))
@@ -1184,8 +1282,8 @@ class Player():
                 screen.draw_rect(show_sword_box, (255,255,0))
 
     def move(self, x, y):
-        global frame_count, scroll_x_offset, scroll_y_offset
-        if self.__is_attacking:
+        global frame_count, scroll_x_offset, scroll_y_offset, game_over_countdown
+        if self.__is_attacking or self.__player_current_health <= 0:
             return
 
         if frame_count % 3 == 0:
@@ -1196,21 +1294,21 @@ class Player():
 
         if x == 1:
             if new_x <= MAP_WIDTH*TILE_WIDTH - 16:
-                new_x += 3
-            self.__direction = 3
+                new_x += PLAYER_SPEED
+            self.__direction = FACING_RIGHT
         elif x == -1:
             if new_x >= 16:
-                new_x -= 3
-            self.__direction = 1
+                new_x -= PLAYER_SPEED
+            self.__direction = FACING_LEFT
 
         if y == 1:
             if new_y <= MAP_HEIGHT*TILE_HEIGHT - 6:
-                new_y += 3
-            self.__direction = 2
+                new_y += PLAYER_SPEED
+            self.__direction = FACING_DOWN
         elif y == -1:
             if new_y >= 78:
-                new_y -= 3
-            self.__direction = 0
+                new_y -= PLAYER_SPEED
+            self.__direction = FACING_UP
 
         # Check the collision map to see if the player can move to the new position
         # Also used to see if the player has stepped on a teleport square and move
@@ -1223,27 +1321,27 @@ class Player():
             if collision_layer[cy][cx] == 0 or collision_layer[cy][cx] == 4:
                 self.__player_world_x = new_x
                 self.__player_world_y = new_y
-            elif collision_layer[cy][cx] == 2:              # Teleport Yellow 1
+            elif collision_layer[cy][cx] == 2:              # Teleport into house
                 self.__player_world_x = 5232
                 self.__player_world_y = 470
                 scroll_x_offset = 98
                 scroll_y_offset = 0
-            elif collision_layer[cy][cx] == 3:              # Teleport Purple 1
+            elif collision_layer[cy][cx] == 3:              # Teleport out of house
                 self.__player_world_x = (22*TILE_WIDTH)+TILE_WIDTH//2
                 self.__player_world_y = (56*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 12
                 scroll_y_offset = 49
-            elif collision_layer[cy][cx] == 5:              # Teleport into maze (Yellow 2)
+            elif collision_layer[cy][cx] == 5:              # Teleport into maze
                 self.__player_world_x = (110*TILE_WIDTH)+TILE_WIDTH//2
                 self.__player_world_y = (104*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 104
                 scroll_y_offset = 97
-            elif collision_layer[cy][cx] == 6:              # Teleport to forest entrance (Purple 2)
+            elif collision_layer[cy][cx] == 6:              # Teleport to forest entrance
                 self.__player_world_x = (36*TILE_WIDTH)+TILE_WIDTH//2
                 self.__player_world_y = (31*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 30
                 scroll_y_offset = 25
-            elif collision_layer[cy][cx] == 7:              # Teleport yellow 3
+            elif collision_layer[cy][cx] == 7:              # Teleport into cave if player has sword
                 if items.is_carried("Sword"):
                     self.__player_world_x = (34*TILE_WIDTH)+TILE_WIDTH//2
                     self.__player_world_y = 137*TILE_HEIGHT
@@ -1257,6 +1355,13 @@ class Player():
                 self.__player_world_y = (86*TILE_HEIGHT)+TILE_HEIGHT//2
                 scroll_x_offset = 7
                 scroll_y_offset = 81
+            elif collision_layer[cy][cx] == 9:              # walked onto ship
+                self.__player_world_x = 9*TILE_WIDTH+24
+                self.__player_world_y = (155*TILE_HEIGHT)+TILE_HEIGHT//2
+                scroll_x_offset = 0
+                scroll_y_offset = 150
+                GUI.display_message("You escaped the island!", 90)
+                game_over_countdown = 90
             else:
                 self.__ani_count = 7
 
@@ -1413,7 +1518,40 @@ class MenuButton():
 
     def draw(self):
         screen.draw_filled_rect(self.__box, (255, 255, 255))
-        screen.draw_big_text_centred(self.__label, self.__box.y + 10, (0,0,0))
+        screen.draw_big_text_centred(self.__label, self.__box.x, self.__box.y, self.__box.w, self.__box.h, (0,0,0))
+        mouse_pos = pygame.mouse.get_pos()
+        if self.__box.collidepoint(mouse_pos):
+            screen.draw_rect(self.__box, (255,0,0), 2)
+
+    def is_pressed(self):
+        mouse_pos = pygame.mouse.get_pos()
+        if self.__box.collidepoint(mouse_pos):
+            return True
+        else:
+            return False
+
+#########################################################################################
+# GameSlotButton class. Handles buttons on the game loading menu screen
+#########################################################################################
+
+class GameSlotButton():
+    def __init__(self, label, box, save_datetime, max_health, current_health ):
+        self.__label = label
+        self.__box = box
+        self.__save_datetime = save_datetime
+        self.__max_health = max_health
+        self.__current_health = current_health
+
+    def draw(self):
+        screen.draw_filled_rect(self.__box, (255, 255, 255))
+        if self.__max_health == 0:
+            screen.draw_big_text(self.__label, (self.__box.x+10, self.__box.y+10), (0,0,0))
+        else:
+            screen.draw_text(self.__label, (self.__box.x+10, self.__box.y+12), (0,0,0))
+            GUI.draw_health(self.__box.x+10, self.__box.y+40, 304, 26, self.__max_health, self.__current_health)
+            save_date, save_time = self.__save_datetime.split(" ", 1)
+            screen.draw_text(save_date, (self.__box.x+self.__box.w-150, self.__box.y+17), (0,0,0))
+            screen.draw_text(save_time, (self.__box.x+self.__box.w-150, self.__box.y+42), (0,0,0))
         mouse_pos = pygame.mouse.get_pos()
         if self.__box.collidepoint(mouse_pos):
             screen.draw_rect(self.__box, (255,0,0), 2)
@@ -1432,21 +1570,28 @@ class MenuButton():
 class MenuScreen():
     def __init__(self):
         self.__in_menu = True
+        self.__back_pressed = False
         self.__logo_image = SpriteSheet("logo.png", 558, 100, 1, 1)
         self.__start_button = MenuButton("Start Game", Rect(138, 165, 540, 80))
         self.__controls_button = MenuButton("Controls", Rect(138, 265, 540, 80))
         self.__credits_button = MenuButton("Credits", Rect(138, 365, 540, 80))
+        self.__back_button = MenuButton("Back", Rect(28, 450, 150, 50))
+        self.__controls_text = "WASD - move character\n \nE - Pick up item\nQ - Drop selected item\nO - Save game\n \n1 & 2 - Select hotbar slots\n \n" \
+                               "Right mouse button - Use item or talk to NPC if no item                                    is selected"
+        self.__credits_text = "This project uses art assets created for the Liberated Pixel Cup (LPC).\n" \
+                              "LPC graphics by Ivan Voirol, Leana Zimmerman bluecarrot16, Benjamin K. Smith (BenCreating), Evert, Eliza Wyatt (ElizaWy)," \
+                              "TheraHedwig, MuffinElZangano, Durrani, Johannes Sjlund (wulax), Stephen Challener (Redshrike)." \
+                              "Used under the GNU GPL 3.0 and/or CC-BY-SA 3.0 licenses.\n" \
+                              "Programmed in Python by Samantha Pinder for the AQA Non-Exam Assessment 2024"
 
     def menu_main(self):
-        screen.clear((143,210,255))
-        self.__logo_image.draw(129, 30, 0)
         while self.__in_menu:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.__in_menu = False
-                elif event.type == pygame.KEYDOWN:
-                    self.menu_key_down(event.key, event.mod)
-                elif event.type == pygame.MOUSEBUTTONDOWN:
+            if pygame.event.peek(pygame.QUIT):
+                return
+            screen.clear((143,210,255))
+            self.__logo_image.draw(129, 30, 0)
+            for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                if event.type == pygame.MOUSEBUTTONDOWN:
                     self.menu_mouse_down(event.pos, event.button)
 
             self.__start_button.draw()
@@ -1454,13 +1599,112 @@ class MenuScreen():
             self.__credits_button.draw()
             screen.update()
 
+    def menu_show_controls(self):
+        screen.clear((143,210,255))
+        self.__logo_image.draw(129, 30, 0)
+        screen.draw_filled_rect((100, 150, 616, 270), (255, 255, 255))
+        wrapped_text = []
+        text_list = self.__controls_text.splitlines()
+        for text in text_list:
+            #wrap the text so there is a max of 55 characters on a line
+            #'drop_whitespace=False' allows for blank lines
+            wraplist = textwrap.wrap(text, 55, drop_whitespace=False)
+            wrapped_text += wraplist
+        y = 160
+        for textline in wrapped_text:
+            screen.draw_text(textline, (110, y), (0,0,0))
+            y += 25
+        self.__back_pressed = False
+        while not self.__back_pressed:
+            if pygame.event.peek(pygame.QUIT):
+                return
+            for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    self.menu_mouse_down(event.pos, event.button)
+
+            self.__back_button.draw()
+            screen.update()
+
+    def menu_show_credits(self):
+        screen.clear((143,210,255))
+        self.__logo_image.draw(129, 30, 0)
+        screen.draw_filled_rect((100, 150, 616, 270), (255, 255, 255))
+        wrapped_text = []
+        text_list = self.__credits_text.splitlines()
+        for text in text_list:
+            #wrap the text so there is a max of 55 characters on a line
+            wraplist = textwrap.wrap(text, 55)
+            wrapped_text += wraplist
+        y = 160
+        for textline in wrapped_text:
+            screen.draw_text(textline, (110, y), (0,0,0))
+            y += 25
+        self.__back_pressed = False
+        while not self.__back_pressed:
+            if pygame.event.peek(pygame.QUIT):
+                return
+            for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    self.menu_mouse_down(event.pos, event.button)
+
+            self.__back_button.draw()
+            screen.update()
+
     def menu_key_down(self, key, mod):
-        if key == keys.SPACE:
-            self.__in_menu = False
+        pass
 
     def menu_mouse_down(self, pos, button):
         if button == mouse.LEFT:
             if self.__start_button.is_pressed():
+                self.__in_menu = False
+            elif self.__controls_button.is_pressed():
+                self.menu_show_controls()
+            elif self.__credits_button.is_pressed():
+                self.menu_show_credits()
+            elif self.__back_button.is_pressed():
+                self.__back_pressed = True
+
+#########################################################################################
+# StartScreen class. Draws the game slot selection screen and handles the selection made
+#########################################################################################
+
+class StartScreen():
+    def __init__(self):
+        self.__in_menu = True
+        self.__logo_image = SpriteSheet("logo.png", 558, 100, 1, 1)
+        self.__slot_meta = game_slot.get_slot_meta()
+        self.__file_1_button = GameSlotButton(self.__slot_meta[1][0], Rect(138, 165, 540, 80), self.__slot_meta[1][1], self.__slot_meta[1][2], self.__slot_meta[1][3])
+        self.__file_2_button = GameSlotButton(self.__slot_meta[2][0], Rect(138, 265, 540, 80), self.__slot_meta[2][1], self.__slot_meta[2][2], self.__slot_meta[2][3])
+        self.__file_3_button = GameSlotButton(self.__slot_meta[3][0], Rect(138, 365, 540, 80), self.__slot_meta[3][1], self.__slot_meta[3][2], self.__slot_meta[3][3])
+
+    def menu_main(self):
+        screen.clear((143,210,255))
+        self.__logo_image.draw(129, 30, 0)
+        while self.__in_menu:
+            if pygame.event.peek(pygame.QUIT):
+                return
+            for event in pygame.event.get(pygame.MOUSEBUTTONDOWN):
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    self.menu_mouse_down(event.pos, event.button)
+
+            self.__file_1_button.draw()
+            self.__file_2_button.draw()
+            self.__file_3_button.draw()
+            screen.update()
+
+    def menu_key_down(self, key, mod):
+        pass
+
+    def menu_mouse_down(self, pos, button):
+        if button == mouse.LEFT:
+            if self.__file_1_button.is_pressed():
+                game_slot.load_game(1)
+                self.__in_menu = False
+            elif self.__file_2_button.is_pressed():
+                game_slot.load_game(2)
+                self.__in_menu = False
+            elif self.__file_3_button.is_pressed():
+                game_slot.load_game(3)
                 self.__in_menu = False
 
 #########################################################################################
@@ -1472,14 +1716,11 @@ def on_key_down(key, mod):
 
     if key == keys.E:
         item_got = items.pickup(player.get_world_x(), player.get_world_y())  ##calls pickup function
-        print(item_got)
-        print(items.get_inventory())
-        ##if item_got == "Sword":   ##checks if the picked up item was a sword
-            ##player.set_has_sword(True)
+        if item_got == "Bucket":
+            GUI.display_message("You could fill this with water...", 90)
 
     if key == keys.Q:
         item_dropped = items.drop(player.get_world_x(), player.get_world_y())
-        print(items.get_inventory())
         if item_dropped == "Sword":
             player.set_has_sword(False)
 
@@ -1500,28 +1741,12 @@ def on_key_down(key, mod):
     else:
         player.set_has_sword(False)
 
-    if key == keys.O:
-        save_game.save_open(1)
-        save_game.save_write_list([kid_mission, scroll_x_offset, scroll_y_offset])
-        player.save()
-        items.save()
-        people_npcs.save()
-        monster_npcs.save()
-        save_game.save_close()
-        GUI.display_message("Game Saved", 90)
+    if key == keys.R:
+        player.take_damage(10)
 
-    if key == keys.P:
-        save_game.load_open(1)
-        data = save_game.load_read_list()
-        kid_mission = int(data[0])
-        scroll_x_offset = int(data[1])
-        scroll_y_offset = int(data[2])
-        player.load()
-        items.load()
-        people_npcs.load()
-        monster_npcs.load()
-        save_game.load_close()
-        GUI.display_message("Game Loaded", 90)
+    if key == keys.O:
+        game_slot.save_game()
+        GUI.display_message("Game Saved", 90)
 
 #########################################################################################
 # Function to handle mouse button presses
@@ -1567,7 +1792,7 @@ def draw():
 #########################################################################################
 
 def update():
-    global scroll_x_offset, scroll_y_offset, scroll_x_counter, scroll_y_counter
+    global scroll_x_offset, scroll_y_offset, scroll_x_counter, scroll_y_counter, game_over_countdown
     keys=pygame.key.get_pressed()
 
     # If the screen needs scrolling then keep scrolling it
@@ -1627,13 +1852,20 @@ def update():
     monster_npcs.update()
 
     player.update()
+    if game_over_countdown > 0 and game_over_countdown < 1000:
+        game_over_countdown -= 1
 
 #########################################################################################
 # Startup function to create all the game objects
 #########################################################################################
 
 def startup():
-    global game_map, save_game, player, people_npcs, monster_npcs, items, scene, GUI
+    global game_map, game_slot, player, game_over_countdown, people_npcs, monster_npcs, items, scene, GUI, kid_mission, scroll_x_offset, scroll_y_offset
+
+    #
+    kid_mission = KID_MISSION_START
+    scroll_x_offset = 50
+    scroll_y_offset = 83
 
     # Load the map and generate the maze
     game_map = Map(0, 0, 11, 17, "tilesheet.png")
@@ -1641,10 +1873,13 @@ def startup():
     game_map.generate_maze()
 
     #Creates the object for loading and saving the game
-    save_game = SaveGameManager()
+    game_slot = SaveGameManager()
 
     # Create a Player object
     player = Player(PLAYER_START_X, PLAYER_START_Y, Rect(-15, -10, 33, 15), 2, "herosheet.png", "heroattack.png")
+
+    #
+    game_over_countdown = 1000
 
     # Create a PersonManager object and add the villagers to the game
     people_npcs = PersonManager()
@@ -1653,6 +1888,7 @@ def startup():
     people_npcs.add_person("kid", 33*TILE_WIDTH+24, 109*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "kid.png", PERSON_MOVE_NONE)
     people_npcs.add_person("blacksmith", 35*TILE_WIDTH+24, 60*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "blacksmith.png", PERSON_MOVE_NONE)
     people_npcs.add_person("pirate", 8*TILE_WIDTH+24, 88*TILE_HEIGHT+24, Rect(-15, -10, 33, 15), 2, "pirate.png", PERSON_MOVE_NONE)
+    people_npcs.add_person("abi", 34*TILE_WIDTH+24, 35*TILE_HEIGHT, Rect(-15, -10, 33, 15), 2, "abi.png", PERSON_MOVE_NONE)
 
     # Create a MonsterManager object and add the monsters to the game
     monster_npcs = MonsterManager()
@@ -1669,7 +1905,7 @@ def startup():
 
     # Create an ItemManager object and add all the items to the game
     items = ItemManager("items.png")
-    items.add_item("Sword", -100000, -100000, Rect(-15, -13, 16, 8), True, 0)
+    items.add_item("Sword",-100000, -100000 , Rect(-15, -13, 16, 8), True, 0)
     items.add_item("Empty_Bucket", 48 * TILE_WIDTH+24, 120 * TILE_HEIGHT, Rect(-15, -13, 31, 15), True, 10)
     items.add_item("Filled_Bucket", -100000, -100000, Rect(-15, -13, 31, 15), True, 15)
     items.add_item("Axe", -100000, -100000, Rect(-15, -11, 12, 8), True, 5)
@@ -1684,7 +1920,7 @@ def startup():
     items.add_item("Gold_Coins", -100000, -100000, Rect(-15, -13, 31, 15), True, 50)
     items.add_item("Gate", 9 * TILE_WIDTH+23, 90 * TILE_HEIGHT, Rect(-15, -13, 31, 15), False, 45)
 
-    if random.randint(0,1) == 0:
+    if random.randint(1,100) > 50:
         items.add_item("Key", 48*TILE_WIDTH, 133*TILE_HEIGHT, Rect(-15, -13, 31, 15), True, 40)
     else:
         items.add_item("Key", 19*TILE_WIDTH, 128*TILE_HEIGHT, Rect(-15, -13, 31, 15), True, 40)
@@ -1698,27 +1934,32 @@ def game_main():
     global frame_count, screen
 
     screen = Display(WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_TITLE, GAME_FPS)
-    startup()
-    menu = MenuScreen()
-    menu.menu_main()
-
-    frame_count = 0
     playing = True
     while playing:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                playing = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                on_mouse_down(event.pos, event.button)
-            elif event.type == pygame.MOUSEBUTTONUP:
-                on_mouse_up(event.pos, event.button)
-            elif event.type == pygame.KEYDOWN:
-                on_key_down(event.key, event.mod)
+        startup()
+        menu = MenuScreen()
+        menu.menu_main()
 
-        update()
-        draw()
-        screen.update()
-        frame_count += 1
+        start_menu = StartScreen()
+        start_menu.menu_main()
+
+        frame_count = 0
+        playing = True
+        while playing and game_over_countdown>0:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    playing = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    on_mouse_down(event.pos, event.button)
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    on_mouse_up(event.pos, event.button)
+                elif event.type == pygame.KEYDOWN:
+                    on_key_down(event.key, event.mod)
+
+            update()
+            draw()
+            screen.update()
+            frame_count += 1
 
 
 game_main()
